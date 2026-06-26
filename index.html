@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>The Penis Master Mystery</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+            touch-action: none;
+            user-select: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        canvas {
+            image-rendering: pixelated;
+            border: 4px solid #0f0;
+            box-shadow: 0 0 30px rgba(0,255,0,0.2);
+            max-width: 95vw;
+            max-height: 62vh;
+        }
+        /* DIALOGUE - positioned ABOVE the d-pad */
+        #dialogueBox {
+            position: fixed;
+            bottom: 155px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.96);
+            border: 3px solid #0f0;
+            padding: 14px 22px;
+            border-radius: 8px;
+            color: #0f0;
+            font-size: 16px;
+            line-height: 1.4;
+            text-align: center;
+            min-width: 320px;
+            max-width: 92vw;
+            z-index: 10;
+            pointer-events: none;
+            box-shadow: 0 0 15px rgba(0,255,0,0.15);
+        }
+        #ui {
+            position: fixed;
+            top: 8px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #0f0;
+            font-size: 15px;
+            background: rgba(0,0,0,0.9);
+            padding: 6px 18px;
+            border-radius: 8px;
+            z-index: 10;
+            border: 1px solid #0f0;
+        }
+        /* D-PAD */
+        #dpad {
+            position: fixed;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 20;
+            display: grid;
+            grid-template-columns: 65px 65px 65px;
+            grid-template-rows: 65px 65px;
+            gap: 5px;
+        }
+        .db {
+            width: 65px;
+            height: 65px;
+            background: rgba(0,255,0,0.12);
+            border: 3px solid rgba(0,255,0,0.5);
+            border-radius: 14px;
+            color: #0f0;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .db:active { background: rgba(0,255,0,0.35); transform: scale(0.93); }
+        .blank { visibility: hidden; }
+    </style>
+</head>
+<body>
+    <canvas id="c"></canvas>
+    <div id="ui">🔍 Penises: <span id="score">0</span>/7 | 🥚 Secrets: <span id="secs">0</span>/5</div>
+    <div id="dialogueBox">Walk up to objects to investigate the classroom!</div>
+    <div id="dpad">
+        <div class="blank"></div>
+        <div class="db" id="bU">▲</div>
+        <div class="blank"></div>
+        <div class="db" id="bL">◀</div>
+        <div class="db" id="bD">▼</div>
+        <div class="db" id="bR">▶</div>
+    </div>
+
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+
+const GW = 480, GH = 400;
+c.width = GW; c.height = GH;
+
+// ===== GAME STATE =====
+let score = 0;
+let secretCount = 0;
+let phase = 'play';
+let revealStart = 0;
+let sparkles = [];
+
+// ===== PLAYER =====
+let px = 240, py = 300, pdir = 0;
+let pSpeed = 2.2;
+let pMoving = false;
+let pFrame = 0;
+let pAnimTimer = 0;
+
+// ===== INPUT =====
+const kDown = {};
+window.addEventListener('keydown', e => { kDown[e.code] = true; });
+window.addEventListener('keyup', e => { kDown[e.code] = false; });
+
+const mDir = { u:false, d:false, l:false, r:false };
+function setupDir(id, key) {
+    const el = document.getElementById(id);
+    el.addEventListener('touchstart', e => { e.preventDefault(); mDir[key]=true; });
+    el.addEventListener('touchend', e => { e.preventDefault(); mDir[key]=false; });
+    el.addEventListener('touchcancel', e => { mDir[key]=false; });
+}
+setupDir('bU','u'); setupDir('bD','d'); setupDir('bL','l'); setupDir('bR','r');
+
+// ===== SOLIDS =====
+const solids = [];
+const interactables = [];
+const eggList = [];
+
+function addWall(x,y,w,h) { solids.push({x,y,w,h,type:'wall'}); }
+
+function addInteractable(x,y,w,h,label,kind) {
+    solids.push({x,y,w,h,type:kind||'furniture'});
+    interactables.push({x,y,w,h,label,triggered:false,kind:'penis',foundPenis:false});
+}
+
+// ===== BUILD CLASSROOM =====
+// Walls
+addWall(0,0,GW,20);    // top
+addWall(0,380,GW,20);  // bottom
+addWall(0,0,20,GH);    // left
+addWall(460,0,20,GH);  // right
+
+// Chalkboard on top wall
+addInteractable(160,20,160,20,'Chalkboard','chalkboard');
+
+// Teacher's desk
+addInteractable(185,60,110,42,'Teacher Desk');
+
+// Pull-down map
+addInteractable(360,30,80,48,'Pull-Down Map','map');
+
+// Student desks - Row 1
+addInteractable(40,140,80,36,'Desk 1');
+addInteractable(150,140,80,36,'Desk 2');
+addInteractable(260,140,80,36,'Desk 3');
+addInteractable(370,140,80,36,"Dave's Desk");
+
+// Student desks - Row 2
+addInteractable(40,240,80,36,'Desk 5');
+addInteractable(150,240,80,36,'Desk 6');
+addInteractable(260,240,80,36,'Desk 7');
+
+// Lockers
+addInteractable(22,60,30,80,'Locker','locker');
+addInteractable(22,160,30,80,'Locker 2','locker');
+
+// Bookshelf
+addInteractable(430,100,28,80,'Bookshelf','shelf');
+
+// Backpack
+addInteractable(130,310,30,28,'Backpack');
+
+// Textbook stack
+addInteractable(320,310,36,18,'Textbook Stack');
+
+// Window
+addInteractable(200,360,80,18,'Window Sill','window');
+
+// ===== EASTER EGGS WITH RICH'S PUNCHLINES =====
+eggList.push({x:70,y:340,w:26,h:30,label:'Werewolf',
+    msg:"Oh shit, a werewolf!", triggered:false});
+eggList.push({x:400,y:55,w:26,h:32,label:'Lamp',
+    msg:"Looks like this is glued down.", triggered:false});
+eggList.push({x:300,y:215,w:32,h:14,label:'Twix',
+    msg:"You should have put a ring pop on it.", triggered:false});
+eggList.push({x:448,y:345,w:16,h:26,label:'CandyCorn',
+    msg:"I'm not going to let you in me for no candy corn.", triggered:false});
+eggList.push({x:30,y:355,w:24,h:24,label:'StopSign',
+    msg:"I'm sorry, officer. I was waiting for it to turn green.", triggered:false});
+
+// ===== DIALOGUE =====
+let dTimer = 0;
+function say(text, dur) {
+    dur = dur || 4000;
+    document.getElementById('dialogueBox').textContent = text;
+    clearTimeout(dTimer);
+    if(dur > 0) dTimer = setTimeout(() => {
+        if(phase==='play') document.getElementById('dialogueBox').textContent = "Walk up to objects to investigate!";
+    }, dur);
+}
+
+function updateUI() {
+    document.getElementById('score').textContent = score;
+    document.getElementById('secs').textContent = secretCount;
+}
+
+// ===== SPARKLES =====
+function spawnSparkle(x,y) {
+    for(let i=0;i<15;i++) {
+        sparkles.push({
+            x, y,
+            vx: (Math.random()-0.5)*6,
+            vy: (Math.random()-0.5)*6,
+            life: 30+Math.random()*25,
+            col: ['#ff0','#f80','#0f0','#fff','#ffaa00'][Math.floor(Math.random()*5)]
+        });
+    }
+}
+function updateSparkles() {
+    for(let i=sparkles.length-1;i>=0;i--) {
+        let s=sparkles[i]; s.x+=s.vx; s.y+=s.vy; s.life--;
+        if(s.life<=0) sparkles.splice(i,1);
+    }
+}
+function drawSparkles() {
+    sparkles.forEach(s=>{
+        ctx.globalAlpha = s.life/55;
+        ctx.fillStyle = s.col;
+        ctx.fillRect(s.x-3,s.y-3,6,6);
+    });
+    ctx.globalAlpha=1;
+}
+
+// ===== PENIS DRAWING (small, hidden-looking) =====
+function drawPenis(cx,cy,scale) {
+    let s = scale || 0.5;
+    ctx.save();
+    ctx.translate(cx,cy);
+    ctx.scale(s,s);
+    
+    // Shaft
+    ctx.fillStyle = '#ffd8b1';
+    ctx.fillRect(-4,-22,8,22);
+    // Head
+    ctx.fillStyle = '#ffb888';
+    ctx.beginPath(); ctx.arc(0,-22,6,Math.PI,0); ctx.fill();
+    // Tip detail
+    ctx.fillStyle = '#ee9977';
+    ctx.beginPath(); ctx.arc(0,-22,3,Math.PI,0); ctx.fill();
+    // Balls
+    ctx.fillStyle = '#eebb99';
+    ctx.beginPath(); ctx.arc(-4,4,5,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(4,4,5,0,Math.PI*2); ctx.fill();
+    // Vein lines
+    ctx.strokeStyle = '#cc9977'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-2,-6); ctx.lineTo(-2,-18);
+    ctx.moveTo(2,-6); ctx.lineTo(2,-18);
+    ctx.stroke();
+    
+    ctx.restore();
+}
+
+// ===== INTERACTION CHECK =====
+function checkInteract() {
+    // Player's facing point (farther reach now)
+    let fx = px+8, fy = py+8;
+    let reach = 18;
+    if(pdir===0) fy += reach;
+    else if(pdir===1) fy -= reach;
+    else if(pdir===2) fx -= reach;
+    else if(pdir===3) fx += reach;
+    
+    // Check interactables (penis hiding spots)
+    for(let obj of interactables) {
+        if(obj.triggered) continue;
+        if(fx > obj.x-2 && fx < obj.x+obj.w+2 && fy > obj.y-2 && fy < obj.y+obj.h+2) {
+            obj.triggered = true;
+            obj.foundPenis = true;
+            score++;
+            updateUI();
+            spawnSparkle(obj.x+obj.w/2, obj.y+obj.h/2);
+            say(`You found a PENIS behind the ${obj.label}! (${score}/7)`);
+            if(score >= 7) setTimeout(startReveal, 1500);
+            return;
+        }
+    }
+    
+    // Check easter eggs (bigger reach so they actually trigger)
+    for(let egg of eggList) {
+        if(egg.triggered) continue;
+        // Generous overlap - player center vs egg center
+        let ecx = egg.x + egg.w/2;
+        let ecy = egg.y + egg.h/2;
+        let pcx = px + 8;
+        let pcy = py + 8;
+        let dist = Math.hypot(pcx-ecx, pcy-ecy);
+        if(dist < 30) {
+            egg.triggered = true;
+            secretCount++;
+            updateUI();
+            say(egg.msg, 5500);
+            spawnSparkle(ecx, ecy);
+            return;
+        }
+    }
+}
+
+// ===== PLAYER MOVEMENT =====
+function movePlayer() {
+    let dx=0, dy=0;
+    if(kDown['ArrowUp']||kDown['KeyW']||mDir.u) { dy=-1; pdir=1; }
+    if(kDown['ArrowDown']||kDown['KeyS']||mDir.d) { dy=1; pdir=0; }
+    if(kDown['ArrowLeft']||kDown['KeyA']||mDir.l) { dx=-1; pdir=2; }
+    if(kDown['ArrowRight']||kDown['KeyD']||mDir.r) { dx=1; pdir=3; }
+    
+    if(dx!==0&&dy!==0) { dx*=0.707; dy*=0.707; }
+    pMoving = (dx!==0||dy!==0);
+    
+    let nx = px + dx*pSpeed;
+    let ny = py + dy*pSpeed;
+    
+    // Collision
+    let pw=10, ph=10;
+    let pcx = nx+8, pcy = ny+8;
+    let blocked = false;
+    
+    for(let s of solids) {
+        if(pcx+pw/2>s.x && pcx-pw/2<s.x+s.w && pcy+ph/2>s.y && pcy-ph/2<s.y+s.h) {
+            blocked = true; break;
+        }
+    }
+    
+    if(!blocked) { px=nx; py=ny; }
+    else {
+        // Slide along walls
+        let bx=false, by=false;
+        let tcx = nx+8, tcy = py+8;
+        for(let s of solids) {
+            if(tcx+pw/2>s.x && tcx-pw/2<s.x+s.w && tcy+ph/2>s.y && tcy-ph/2<s.y+s.h) bx=true;
+        }
+        let scx = px+8, scy = ny+8;
+        for(let s of solids) {
+            if(scx+pw/2>s.x && scx-pw/2<s.x+s.w && scy+ph/2>s.y && scy-ph/2<s.y+s.h) by=true;
+        }
+        if(!bx) px=nx;
+        if(!by) py=ny;
+    }
+    
+    px = Math.max(24, Math.min(GW-36, px));
+    py = Math.max(24, Math.min(GH-36, py));
+    
+    if(pMoving) {
+        pAnimTimer++;
+        if(pAnimTimer>7) { pAnimTimer=0; pFrame=(pFrame+1)%4; }
+        checkInteract();
+    }
+}
+
+// ===== DRAW EVERYTHING =====
+function drawClassroom() {
+    // Floor
+    ctx.fillStyle = '#c4a882';
+    ctx.fillRect(0,0,GW,GH);
+    
+    // Floor tile grid
+    ctx.strokeStyle = '#b89870';
+    ctx.lineWidth = 1;
+    for(let tx=0;tx<GW;tx+=40) {
+        for(let ty=0;ty<GH;ty+=40) {
+            ctx.strokeRect(tx,ty,40,40);
+            // Subtle shade variation
+            if((tx/40+ty/40)%2===0) {
+                ctx.fillStyle = 'rgba(0,0,0,0.03)';
+                ctx.fillRect(tx,ty,40,40);
+            }
+        }
+    }
+    
+    // Walls
+    ctx.fillStyle = '#6a5a4a';
+    ctx.fillRect(0,0,GW,20);
+    ctx.fillRect(0,380,GW,20);
+    ctx.fillRect(0,0,20,GH);
+    ctx.fillRect(460,0,20,GH);
+    // Wall top highlight
+    ctx.fillStyle = '#7a6a5a';
+    ctx.fillRect(0,0,GW,4);
+    ctx.fillRect(0,0,4,GH);
+    // Wall baseboards
+    ctx.fillStyle = '#5a4a3a';
+    ctx.fillRect(0,16,GW,4);
+    ctx.fillRect(0,380,GW,4);
+    ctx.fillRect(16,0,4,GH);
+    ctx.fillRect(460,0,4,GH);
+    
+    // Door
+    ctx.fillStyle = '#5a3a1a';
+    ctx.fillRect(220,380,40,20);
+    ctx.fillStyle = '#7a5a2a';
+    ctx.fillRect(224,382,32,16);
+    ctx.fillStyle = '#FFD700';
+    ctx.beginPath(); ctx.arc(250,390,3,0,Math.PI*2); ctx.fill(); // doorknob
+    
+    // === CHALKBOARD ===
+    ctx.fillStyle = '#1a5a1a';
+    ctx.fillRect(160,20,160,20);
+    ctx.strokeStyle = '#8B6914'; ctx.lineWidth = 3;
+    ctx.strokeRect(160,20,160,20);
+    ctx.fillStyle = '#8B6914';
+    ctx.fillRect(170,38,140,4); // tray
+    // Chalk pieces on tray
+    ctx.fillStyle = '#fff'; ctx.fillRect(175,36,8,3);
+    ctx.fillStyle = '#ff0'; ctx.fillRect(186,36,6,3);
+    ctx.fillStyle = '#f0f'; ctx.fillRect(195,36,7,3);
+    
+    // === TEACHER'S DESK ===
+    drawDesk(185,60,110,42,'Teacher Desk', '#8B6914');
+    // Apple on desk
+    ctx.fillStyle = '#cc0000';
+    ctx.beginPath(); ctx.arc(195,72,5,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#5a3a1a';
+    ctx.fillRect(194,67,2,4); // stem
+    
+    // === PULL-DOWN MAP ===
+    ctx.fillStyle = '#e8e8d0';
+    ctx.fillRect(360,30,80,48);
+    ctx.strokeStyle = '#8B6914'; ctx.lineWidth = 2;
+    ctx.strokeRect(360,30,80,48);
+    // Map drawing
+    ctx.fillStyle = '#88ccaa'; ctx.fillRect(370,40,25,25); // land
+    ctx.fillStyle = '#5588cc'; ctx.fillRect(380,45,15,15); // water
+    ctx.fillStyle = '#aaa'; ctx.font = '7px monospace';
+    ctx.fillText('WORLD MAP',375,72);
+    // Rolled up part at top
+    ctx.fillStyle = '#8B6914';
+    ctx.fillRect(360,28,80,5);
+    
+    // === STUDENT DESKS ===
+    drawDesk(40,140,80,36,'Desk 1', '#9B7924');
+    drawDesk(150,140,80,36,'Desk 2', '#9B7924');
+    drawDesk(260,140,80,36,'Desk 3', '#9B7924');
+    drawDesk(370,140,80,36,"Dave's", '#9B7924');
+    
+    // Students at desks (NPCs)
+    drawStudent(55,148,'#ff5555'); // Jock
+    drawStudent(165,148,'#5555ff'); // Nerd
+    drawStudent(275,148,'#55ff55'); // T.Pet
+    // Dave sits at his desk
+    drawStudent(385,148,'#ffaa00');
+    
+    drawDesk(40,240,80,36,'Desk 5', '#9B7924');
+    drawDesk(150,240,80,36,'Desk 6', '#9B7924');
+    drawDesk(260,240,80,36,'Desk 7', '#9B7924');
+    
+    // === LOCKERS ===
+    drawLocker(22,60,30,80);
+    drawLocker(22,160,30,80);
+    
+    // === BOOKSHELF ===
+    ctx.fillStyle = '#6a4a2a';
+    ctx.fillRect(430,100,28,80);
+    ctx.fillStyle = '#7a5a3a';
+    ctx.fillRect(432,102,24,76);
+    // Books
+    let bookColors = ['#cc3333','#3366cc','#33aa44','#cc8800','#aa33aa','#33aaaa'];
+    for(let i=0;i<6;i++) {
+        ctx.fillStyle = bookColors[i];
+        ctx.fillRect(434,104+i*12,20,10);
+        ctx.fillStyle = 'rgba(0,0,0,0.15)';
+        ctx.fillRect(434,104+i*12,20,2);
+    }
+    
+    // === BACKPACK ===
+    ctx.fillStyle = '#cc3333';
+    ctx.fillRect(132,312,26,24);
+    ctx.fillStyle = '#aa2222';
+    ctx.fillRect(135,315,20,10); // pocket
+    ctx.fillStyle = '#882222';
+    ctx.fillRect(137,325,6,10); ctx.fillRect(145,325,6,10); // straps
+    ctx.fillStyle = '#FFD700';
+    ctx.fillRect(142,315,4,3); // zipper
+    
+    // === TEXTBOOK STACK ===
+    ctx.fillStyle = '#3344aa'; ctx.fillRect(322,312,34,6);
+    ctx.fillStyle = '#44aa33'; ctx.fillRect(324,318,30,6);
+    ctx.fillStyle = '#aa3388'; ctx.fillRect(326,324,28,6);
+    
+    // === WINDOW ===
+    ctx.fillStyle = '#5abae8';
+    ctx.fillRect(200,362,80,16);
+    ctx.strokeStyle = '#8B6914'; ctx.lineWidth = 2;
+    ctx.strokeRect(200,362,80,16);
+    ctx.beginPath(); ctx.moveTo(240,362); ctx.lineTo(240,378); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(200,370); ctx.lineTo(280,370); ctx.stroke();
+    // Curtains
+    ctx.fillStyle = '#7a3a6a';
+    ctx.fillRect(196,360,8,20);
+    ctx.fillRect(276,360,8,20);
+    
+    // === CLOCK on wall ===
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(80,35,12,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(80,35,12,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle = '#333';
+    ctx.fillRect(80,25,2,10); // hour hand
+    ctx.fillRect(78,35,8,2); // minute hand
+    ctx.beginPath(); ctx.arc(80,35,2,0,Math.PI*2); ctx.fill(); // center
+    
+    // === SHOW PENISES ON TRIGGERED OBJECTS (small, subtle) ===
+    interactables.forEach(obj => {
+        if(!obj.foundPenis) return;
+        // Draw a SMALL hidden penis - feels like you discovered it
+        drawPenis(obj.x+obj.w/2, obj.y+obj.h/2-2, 0.4);
+    });
+    
+    // === EASTER EGGS ===
+    drawEggs();
+    
+    // === PROXIMITY HINTS ===
+    drawHints();
+    
+    // === SPARKLES ===
+    drawSparkles();
+    
+    // === PLAYER ===
+    drawPlayerSprite();
+}
+
+function drawDesk(x,y,w,h,label,baseCol) {
+    // Desk surface
+    ctx.fillStyle = baseCol || '#8B6914';
+    ctx.fillRect(x,y,w,h);
+    // Highlight
+    ctx.fillStyle = '#a07a30';
+    ctx.fillRect(x+2,y+2,w-4,3);
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillRect(x,y+h-3,w,3);
+    // Legs
+    ctx.fillStyle = '#5a3a0a';
+    ctx.fillRect(x+3,y+h,4,6);
+    ctx.fillRect(x+w-7,y+h,4,6);
+    // Label
+    ctx.fillStyle = '#fff';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x+w/2, y+h/2+3);
+    ctx.textAlign = 'start';
+}
+
+function drawLocker(x,y,w,h) {
+    ctx.fillStyle = '#2a7a5a';
+    ctx.fillRect(x,y,w,h);
+    // Slats
+    ctx.fillStyle = '#1a6a4a';
+    for(let i=0;i<4;i++) ctx.fillRect(x+4,y+8+i*18,w-8,3);
+    // Handle
+    ctx.fillStyle = '#ccc';
+    ctx.fillRect(x+w-7,y+h/2-3,4,6);
+    // Vent holes
+    ctx.fillStyle = '#1a5a3a';
+    for(let v=0;v<3;v++) ctx.fillRect(x+6,y+4+v*4,w-12,1);
+}
+
+function drawStudent(x,y,color) {
+    // Body
+    ctx.fillStyle = color;
+    ctx.fillRect(x,y,10,14);
+    // Head
+    ctx.beginPath(); ctx.arc(x+5,y-3,6,0,Math.PI*2); ctx.fill();
+    // Eyes
+    ctx.fillStyle = '#000';
+    ctx.fillRect(x+2,y-4,2,2);
+    ctx.fillRect(x+6,y-4,2,2);
+}
+
+function drawEggs() {
+    eggList.forEach(egg => {
+        if(egg.triggered) return;
+        let x=egg.x, y=egg.y;
+        
+        if(egg.label === 'Werewolf') {
+            // Brown furry body
+            ctx.fillStyle = '#8B6914';
+            ctx.fillRect(x+4,y+10,18,18);
+            ctx.beginPath(); ctx.arc(x+13,y+7,9,0,Math.PI*2); ctx.fill();
+            // Ears
+            ctx.beginPath(); ctx.moveTo(x+3,y); ctx.lineTo(x+6,y-10); ctx.lineTo(x+9,y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(x+15,y); ctx.lineTo(x+19,y-10); ctx.lineTo(x+23,y); ctx.fill();
+            // Eyes
+            ctx.fillStyle = '#ff0';
+            ctx.fillRect(x+7,y+3,4,4); ctx.fillRect(x+15,y+3,4,4);
+            // Snout
+            ctx.fillStyle = '#6a4914';
+            ctx.fillRect(x+9,y+8,8,5);
+            // Teeth
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(x+10,y+11,2,3); ctx.fillRect(x+14,y+11,2,3);
+        }
+        else if(egg.label === 'Lamp') {
+            // Base
+            ctx.fillStyle = '#999';
+            ctx.fillRect(x+8,y+22,10,8);
+            ctx.fillRect(x+4,y+28,18,4);
+            // Pole
+            ctx.fillStyle = '#bbb';
+            ctx.fillRect(x+11,y+8,4,14);
+            // Shade
+            ctx.fillStyle = '#ffdd44';
+            ctx.beginPath();
+            ctx.moveTo(x,y+8); ctx.lineTo(x+26,y+8);
+            ctx.lineTo(x+22,y-4); ctx.lineTo(x+4,y-4);
+            ctx.closePath(); ctx.fill();
+            // Light glow
+            ctx.fillStyle = 'rgba(255,255,100,0.1)';
+            ctx.beginPath(); ctx.arc(x+13,y+8,18,0,Math.PI*2); ctx.fill();
+        }
+        else if(egg.label === 'Twix') {
+            // Wrapper
+            ctx.fillStyle = '#cc8833';
+            ctx.fillRect(x,y,28,12);
+            // Bar
+            ctx.fillStyle = '#e8c872';
+            ctx.fillRect(x+2,y+2,24,8);
+            // Caramel line
+            ctx.fillStyle = '#aa7733';
+            ctx.fillRect(x+2,y+5,24,2);
+            // Text
+            ctx.fillStyle = '#aa0000'; ctx.font = 'bold 7px monospace';
+            ctx.fillText('TWIX',x+4,y+9);
+        }
+        else if(egg.label === 'CandyCorn') {
+            // Triangular candy
+            ctx.beginPath();
+            ctx.moveTo(x+8,y); ctx.lineTo(x+16,y+24); ctx.lineTo(x,y+24);
+            ctx.closePath(); ctx.fillStyle='#fff'; ctx.fill();
+            // Yellow tip
+            ctx.beginPath();
+            ctx.moveTo(x+8,y); ctx.lineTo(x+12,y+8); ctx.lineTo(x+4,y+8);
+            ctx.closePath(); ctx.fillStyle='#ffcc00'; ctx.fill();
+            // Orange band
+            ctx.beginPath();
+            ctx.moveTo(x+4,y+8); ctx.lineTo(x+12,y+8); ctx.lineTo(x+14,y+15); ctx.lineTo(x+2,y+15);
+            ctx.closePath(); ctx.fillStyle='#ff8800'; ctx.fill();
+        }
+        else if(egg.label === 'StopSign') {
+            // Pole
+            ctx.fillStyle = '#888';
+            ctx.fillRect(x+9,y+16,4,8);
+            // Octagon sign
+            ctx.fillStyle = '#cc0000';
+            ctx.beginPath();
+            let cx=x+11,cy=y+8,r=9;
+            for(let i=0;i<8;i++){
+                let a=(Math.PI/8)+(i*Math.PI/4);
+                let sx=cx+r*Math.cos(a),sy=cy+r*Math.sin(a);
+                if(i===0)ctx.moveTo(sx,sy);else ctx.lineTo(sx,sy);
+            }
+            ctx.closePath(); ctx.fill();
+            // Border
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+            ctx.stroke();
+            // Text
+            ctx.fillStyle = '#fff'; ctx.font = 'bold 5px monospace'; ctx.textAlign = 'center';
+            ctx.fillText('STOP',cx,cy+2); ctx.textAlign = 'start';
+        }
+    });
+}
+
+function drawHints() {
+    // Show ! near untriggered interactables when close
+    interactables.forEach(obj => {
+        if(obj.triggered) return;
+        let dist = Math.hypot(px+8-(obj.x+obj.w/2), py+8-(obj.y+obj.h/2));
+        if(dist < 55) {
+            let alpha = 0.5 + 0.4 * Math.sin(Date.now()/120);
+            ctx.fillStyle = `rgba(255,170,0,${alpha})`;
+            ctx.font = 'bold 16px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', obj.x+obj.w/2, obj.y-8);
+            ctx.textAlign = 'start';
+        }
+    });
+    // Show ? near untriggered eggs when close
+    eggList.forEach(egg => {
+        if(egg.triggered) return;
+        let dist = Math.hypot(px+8-(egg.x+egg.w/2), py+8-(egg.y+egg.h/2));
+        if(dist < 45) {
+            let alpha = 0.5 + 0.4 * Math.sin(Date.now()/120);
+            ctx.fillStyle = `rgba(0,200,255,${alpha})`;
+            ctx.font = 'bold 14px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('?', egg.x+egg.w/2, egg.y-8);
+            ctx.textAlign = 'start';
+        }
+    });
+}
+
+function drawPlayerSprite() {
+    let x = px, y = py;
+    
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath(); ctx.ellipse(x+8,y+28,9,3,0,0,Math.PI*2); ctx.fill();
+    
+    // Legs (behind body)
+    ctx.fillStyle = '#3366cc';
+    if(pMoving) {
+        let off = Math.sin(Date.now()/70)*3;
+        ctx.fillRect(x+3,y+22,5,5+off);
+        ctx.fillRect(x+10,y+22,5,5-off);
+    } else {
+        ctx.fillRect(x+3,y+22,5,5);
+        ctx.fillRect(x+10,y+22,5,5);
+    }
+    
+    // Shoes
+    ctx.fillStyle = '#5a3a1a';
+    if(pMoving) {
+        let off = Math.sin(Date.now()/70)*2;
+        ctx.fillRect(x+2,y+26+off,7,3);
+        ctx.fillRect(x+9,y+26-off,7,3);
+    } else {
+        ctx.fillRect(x+2,y+26,7,3);
+        ctx.fillRect(x+9,y+26,7,3);
+    }
+    
+    // Body
+    ctx.fillStyle = '#ffaa00';
+    ctx.fillRect(x+2,y+12,12,12);
+    
+    // Arms
+    ctx.fillStyle = '#ffddaa';
+    if(pMoving) {
+        let armOff = Math.sin(Date.now()/70)*4;
+        ctx.fillRect(x-1,y+14+armOff,5,8);
+        ctx.fillRect(x+13,y+14-armOff,5,8);
+    } else {
+        ctx.fillRect(x-1,y+14,5,8);
+        ctx.fillRect(x+13,y+14,5,8);
+    }
+    
+    // Head
+    ctx.fillStyle = '#ffddaa';
+    ctx.fillRect(x+2,y+1,12,12);
+    
+    // Hat
+    ctx.fillStyle = '#cc0000';
+    ctx.fillRect(x+1,y-2,14,5);
+    if(pdir===3) { ctx.fillRect(x+12,y-1,6,3); }
+    else if(pdir===2) { ctx.fillRect(x-4,y-1,6,3); }
+    else { ctx.fillRect(x+12,y-1,6,3); }
+    // Hat button
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(x+8,y-1,2,0,Math.PI*2); ctx.fill();
+    
+    // Face
+    ctx.fillStyle = '#000';
+    if(pdir===0) { // down
+        ctx.fillRect(x+4,y+5,2,2); ctx.fillRect(x+10,y+5,2,2);
+        ctx.fillRect(x+5,y+9,6,1);
+    } else if(pdir===1) { // up
+        ctx.fillStyle = '#553300';
+        ctx.fillRect(x+2,y+1,12,5);
+    } else if(pdir===2) { // left
+        ctx.fillRect(x+3,y+5,2,2); ctx.fillRect(x+7,y+5,2,2);
+    } else { // right
+        ctx.fillRect(x+7,y+5,2,2); ctx.fillRect(x+11,y+5,2,2);
+    }
+}
+
+// ===== REVEAL CUTSCENE =====
+function startReveal() {
+    phase = 'reveal';
+    revealStart = Date.now();
+    say("ALL 7 PENISES FOUND! Time to face the class...", 0);
+}
+
+function drawReveal() {
+    let t = Date.now() - revealStart;
+    let cw = GW, ch = GH;
+    
+    ctx.fillStyle = 'rgba(0,0,0,0.98)';
+    ctx.fillRect(0,0,cw,ch);
+    
+    if(t < 2500) {
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 22px monospace'; ctx.textAlign = 'center';
+        ctx.fillText("All evidence points to...", cw/2, ch/2-40);
+        ctx.fillStyle = '#ffaa00'; ctx.font = 'bold 30px monospace';
+        ctx.fillText("▼ ▼ ▼", cw/2, ch/2+20);
+        ctx.textAlign = 'start';
+    }
+    else if(t < 5500) {
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#aaa'; ctx.font = '15px monospace';
+        ctx.fillText("Dave Landau slowly stands up...", cw/2, ch/2-80);
+        
+        let bounce = Math.abs(Math.sin(t/120))*12;
+        let dx = cw/2-30, dy = ch/2-50-bounce;
+        
+        ctx.fillStyle = '#553300'; ctx.fillRect(dx+10,dy-30,40,10);
+        ctx.fillStyle = '#ffddaa'; ctx.fillRect(dx+10,dy-20,40,30);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(dx+18,dy-14,8,8); ctx.fillRect(dx+34,dy-14,8,8);
+        ctx.fillStyle = '#800'; ctx.fillRect(dx+20,dy-2,20,6);
+        ctx.fillStyle = '#ffaa00'; ctx.fillRect(dx,dy+10,60,50);
+        ctx.textAlign = 'start';
+    }
+    else if(t < 9500) {
+        let shake = (Date.now()%80<40)?3:-3;
+        ctx.textAlign = 'center';
+        
+        // Arms up
+        ctx.strokeStyle = '#ffaa00'; ctx.lineWidth = 8;
+        ctx.beginPath(); ctx.moveTo(cw/2-35,180); ctx.lineTo(cw/2-70,110); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cw/2+35,180); ctx.lineTo(cw/2+70,110); ctx.stroke();
+        
+        // Body
+        ctx.fillStyle = '#ffaa00';
+        ctx.fillRect(cw/2-30,160,60,50);
+        // Head bouncing
+        let headBob = Math.abs(Math.sin(t/100))*8;
+        ctx.fillStyle = '#ffddaa';
+        ctx.fillRect(cw/2-22,125-headBob,44,32);
+        ctx.fillStyle = '#553300';
+        ctx.fillRect(cw/2-20,120-headBob,40,8);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(cw/2-14,130-headBob,10,10);
+        ctx.fillRect(cw/2+4,130-headBob,10,10);
+        ctx.fillStyle = '#800';
+        ctx.fillRect(cw/2-10,148-headBob,20,8);
+        
+        // THE PUNCHLINE
+        ctx.fillStyle = '#ff0'; ctx.font = 'bold 22px monospace';
+        ctx.fillText('"I AM THE', cw/2+shake, 70);
+        ctx.font = 'bold 28px monospace';
+        ctx.fillText('PENIS MASTER!"', cw/2+shake, 100);
+        
+        // Teacher crying
+        let ty = 260;
+        ctx.fillStyle = '#888'; ctx.fillRect(cw/2-20,ty,40,50);
+        ctx.fillStyle = '#aaa';
+        ctx.beginPath(); ctx.arc(cw/2,ty-10,20,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#000';
+        ctx.fillRect(cw/2-8,ty-15,5,5); ctx.fillRect(cw/2+3,ty-15,5,5);
+        ctx.fillStyle = '#600';
+        ctx.beginPath(); ctx.arc(cw/2,ty,7,0,Math.PI); ctx.fill();
+        
+        // Animated tears
+        ctx.fillStyle = 'rgba(100,150,255,0.7)';
+        for(let i=0;i<12;i++){
+            let tearY = ty+10+((t*0.6+i*25)%70);
+            ctx.beginPath(); ctx.arc(cw/2+(i-6)*12,tearY,3,0,Math.PI*2); ctx.fill();
+        }
+        ctx.fillStyle = '#88f'; ctx.font = '13px monospace';
+        ctx.fillText("*sobbing uncontrollably*", cw/2, ty+75);
+        ctx.textAlign = 'start';
+    }
+    else if(t < 10500) {
+        ctx.fillStyle = '#fff'; ctx.fillRect(0,0,cw,ch);
+        ctx.fillStyle = '#000'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center';
+        ctx.fillText("Later that day...", cw/2, ch/2);
+        ctx.textAlign = 'start';
+    }
+    else {
+        drawLoonyBin(t);
+    }
+}
+
+function drawLoonyBin(t) {
+    phase = 'loony';
+    let cw = GW, ch = GH;
+    
+    ctx.fillStyle = '#c8b89a'; ctx.fillRect(0,0,cw,ch);
+    
+    ctx.strokeStyle = '#a89878'; ctx.lineWidth = 2;
+    for(let i=0;i<16;i++){ctx.beginPath();ctx.moveTo(i*(cw/14),0);ctx.lineTo(i*(cw/14),ch);ctx.stroke();}
+    for(let j=0;j<12;j++){ctx.beginPath();ctx.moveTo(0,j*(ch/10));ctx.lineTo(cw,j*(ch/10));ctx.stroke();}
+    
+    // Window
+    ctx.fillStyle = '#4a9aba'; ctx.fillRect(cw/2-40,30,80,60);
+    ctx.strokeStyle = '#555'; ctx.lineWidth = 3;
+    for(let b=0;b<4;b++){ctx.beginPath();ctx.moveTo(cw/2-32+b*22,30);ctx.lineTo(cw/2-32+b*22,90);ctx.stroke();}
+    
+    // Rocking teacher
+    let rock = Math.sin(t/350)*14;
+    let tx = cw/2+rock, ty = ch/2-20;
+    
+    ctx.fillStyle = '#eee'; ctx.fillRect(tx-22,ty+20,44,55);
+    ctx.strokeStyle = '#aaa'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(tx-30,ty+30); ctx.lineTo(tx+30,ty+35); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tx-30,ty+45); ctx.lineTo(tx+30,ty+50); ctx.stroke();
+    
+    ctx.fillStyle = '#ccc';
+    ctx.beginPath(); ctx.arc(tx,ty,18,0,Math.PI*2); ctx.fill();
+    
+    let ea = t/120;
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.arc(tx-6+Math.cos(ea)*3,ty-3+Math.sin(ea)*2,3,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(tx+6+Math.cos(ea+1)*3,ty-3+Math.sin(ea+1)*2,3,0,Math.PI*2); ctx.fill();
+    
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(tx,ty+7,5,0,Math.PI); ctx.stroke();
+    
+    ctx.fillStyle = '#333'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
+    ctx.fillText("...penis master... penis master...", cw/2, ty+95);
+    ctx.fillStyle = '#000'; ctx.font = 'bold 16px monospace';
+    ctx.fillText("The teacher was never the same.", cw/2, ty+125);
+    ctx.font = '12px monospace'; ctx.fillStyle = '#555';
+    ctx.fillText("They kept muttering about the penis master...", cw/2, ty+148);
+    
+    if(t > 16000) {
+        ctx.fillStyle = '#0f0'; ctx.font = '18px monospace';
+        ctx.fillText("TAP TO PLAY AGAIN", cw/2, ch-40);
+        phase = 'done';
+    }
+    ctx.textAlign = 'start';
+}
+
+// ===== RESET =====
+function resetGame() {
+    score=0; secretCount=0; phase='play';
+    px=240; py=300;
+    interactables.forEach(o=>{o.triggered=false;o.foundPenis=false;});
+    eggList.forEach(e=>e.triggered=false);
+    sparkles=[];
+    updateUI();
+    say("Walk up to objects to investigate!");
+}
+
+c.addEventListener('click',()=>{if(phase==='done')resetGame();});
+c.addEventListener('touchstart',e=>{if(phase==='done'){e.preventDefault();resetGame();}},{passive:false});
+
+// ===== MAIN LOOP =====
+function loop() {
+    if(phase === 'play') {
+        movePlayer();
+        updateSparkles();
+        drawClassroom();
+    } else {
+        drawReveal();
+    }
+    requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
